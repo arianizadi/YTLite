@@ -49,6 +49,9 @@ jobs:
     runs-on: macos-latest
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
       - name: Install Dependencies
         run: brew install make ldid dpkg
 
@@ -89,7 +92,7 @@ jobs:
       - name: Download YouTube Plus (by version)
         if: ${{ inputs.tweak_version != '' }}
         run: |
-          deb_url="https://github.com/dayanch96/YTLite/releases/download/v${{ inputs.tweak_version }}/com.dvntm.ytlite_${{ inputs.tweak_version }}_iphoneos-arm.deb"
+          deb_url="https://github.com/dayanch96/YTLite/releases/download/v${{ inputs.tweak_version }}/com.dvntm.ytlite_${{ inputs.tweak_version }}_iphoneos-arm64.deb"
           wget "$deb_url" --no-verbose -O ytplus.deb
 
       - name: Download YouTube Plus (by URL)
@@ -101,6 +104,11 @@ jobs:
             echo "::error::Validation failed: The file is not a valid DEB file. Detected type: $file_type."
             exit 1
           fi
+
+      - name: Patch YTLite dylib (bypass paywall)
+        if: ${{ inputs.tweak_version != '' || inputs.tweak_url != '' }}
+        run: |
+          python3 .github/scripts/patch_ytlite.py ytplus.deb
 
       - name: Clone YouTubeHeader
         if: ${{ inputs.enable_youpip || inputs.enable_ytuhd || inputs.enable_yq || inputs.enable_ryd || inputs.enable_ytabc || inputs.enable_demc }}
