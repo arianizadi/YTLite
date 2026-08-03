@@ -120,7 +120,7 @@ jobs:
         run: |
           tweaks="ytplus.deb OpenYoutubeSafariExtension.appex"
           for f in *.deb; do
-            [ -f "$f" ] && tweaks="$tweaks $f"
+            [ -f "$f" ] && [ "$f" != "ytplus.deb" ] && tweaks="$tweaks $f"
           done
           cyan -i youtube.ipa -o YouTubePlus_${{ github.event.inputs.tweak_version }}.ipa -uwef $tweaks -n "${{ github.event.inputs.display_name }}" -b ${{ github.event.inputs.bundle_id }}
 
