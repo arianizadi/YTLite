@@ -1,0 +1,118 @@
+name: Validate build pipeline
+
+on:
+  push:
+    branches:
+      - main
+      - "agent/**"
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  actionlint:
+    name: Lint workflows
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Run actionlint
+        uses: docker://rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 # 1.7.12
+
+  validators:
+    name: Test artifact validators
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - name: Run unit tests
+        run: python3 .github/scripts/test_verify_build.py -v
+      - name: Verify pinned official releases
+        run: |
+          curl --fail --location --max-filesize 104857600 --retry 3 --show-error --silent \
+            https://github.com/dayanch96/YTLite/releases/download/v5.2b4/com.dvntm.ytlite_5.2b4_iphoneos-arm.deb \
+            --output ytplus-5.2b4.deb
+          curl --fail --location --max-filesize 104857600 --retry 3 --show-error --silent \
+            https://github.com/dayanch96/YTLite/releases/download/v5.2.2/com.dvntm.ytlite_5.2.2_iphoneos-arm.deb \
+            --output ytplus-5.2.2.deb
+          python3 .github/scripts/verify_build.py deb --file ytplus-5.2b4.deb --version 5.2b4
+          python3 .github/scripts/verify_build.py deb --file ytplus-5.2.2.deb --version 5.2.2
+
+  injection-smoke:
+    name: Exercise pinned injector (${{ matrix.tweak_version }})
+    runs-on: macos-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - tweak_version: 5.2b4
+            youtube_version: 20.42.3
+          - tweak_version: 5.2.2
+            youtube_version: 21.16.2
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - name: Prepare trusted inputs
+        env:
+          EXTENSION_SHA: c87b5d5551b406477dca883158572f803251f52c
+          TWEAK_VERSION: ${{ matrix.tweak_version }}
+        run: |
+          curl --fail --location --max-filesize 104857600 --retry 3 --show-error --silent \
+            "https://github.com/dayanch96/YTLite/releases/download/v${TWEAK_VERSION}/com.dvntm.ytlite_${TWEAK_VERSION}_iphoneos-arm.deb" \
+            --output ytplus.deb
+          python3 .github/scripts/verify_build.py deb --file ytplus.deb --version "$TWEAK_VERSION"
+          bash .github/scripts/checkout_pinned.sh \
+            https://github.com/BillyCurtis/OpenYouTubeSafariExtension.git \
+            "$EXTENSION_SHA" OpenYoutubeSafariExtension \
+            OpenYoutubeSafariExtension.appex
+      - name: Build synthetic decrypted IPA
+        env:
+          TWEAK_VERSION: ${{ matrix.tweak_version }}
+          YOUTUBE_VERSION: ${{ matrix.youtube_version }}
+        run: |
+          mkdir -p fixture/Payload/YouTube.app
+          printf '%s\n' 'int main(void) { return 0; }' | \
+            xcrun clang -arch arm64 -Wl,-headerpad_max_install_names -x c -o fixture/Payload/YouTube.app/YouTube -
+          plist=fixture/Payload/YouTube.app/Info.plist
+          plutil -create xml1 "$plist"
+          plutil -insert CFBundleExecutable -string YouTube "$plist"
+          plutil -insert CFBundleIdentifier -string com.google.ios.youtube "$plist"
+          plutil -insert CFBundleShortVersionString -string "$YOUTUBE_VERSION" "$plist"
+          cd fixture
+          zip -qr "../YouTube_${YOUTUBE_VERSION}.ipa" Payload
+          cd ..
+          python3 .github/scripts/verify_build.py source-ipa \
+            --file "YouTube_${YOUTUBE_VERSION}.ipa" \
+            --version "$TWEAK_VERSION"
+      - name: Install pinned cyan
+        run: pipx install --force https://github.com/asdfzxcvbn/pyzule-rw/archive/740d3716dcd98c20c000f12cdb88f1f0b2a533a4.zip
+      - name: Inject and validate
+        env:
+          TWEAK_VERSION: ${{ matrix.tweak_version }}
+          YOUTUBE_VERSION: ${{ matrix.youtube_version }}
+        run: |
+          cyan -i "YouTube_${YOUTUBE_VERSION}.ipa" -o "YouTubePlus_${TWEAK_VERSION}.ipa" -uwef \
+            ytplus.deb OpenYoutubeSafariExtension/OpenYoutubeSafariExtension.appex \
+            -n YouTube -b com.google.ios.youtube
+          python3 .github/scripts/verify_build.py packaged-ipa \
+            --file "YouTubePlus_${TWEAK_VERSION}.ipa" \
+            --version "$TWEAK_VERSION" \
+            --bundle-id com.google.ios.youtube

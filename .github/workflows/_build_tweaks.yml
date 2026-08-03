@@ -41,114 +41,141 @@ jobs:
   build-tweaks:
     name: Build Tweaks
     runs-on: macos-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
 
     steps:
+      - name: Checkout workflow validators
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Validate tweak source selection
+        env:
+          TWEAK_URL: ${{ inputs.tweak_url }}
+          TWEAK_VERSION: ${{ inputs.tweak_version }}
+        run: |
+          if [[ -n "$TWEAK_VERSION" && -n "$TWEAK_URL" ]] || [[ -z "$TWEAK_VERSION" && -z "$TWEAK_URL" ]]; then
+            echo "::error::Provide exactly one of tweak_version or tweak_url."
+            exit 1
+          fi
+
       - name: Install Dependencies
         run: brew install make ldid dpkg
 
       - name: Set PATH environment variable
         run: |
-          echo "$(brew --prefix make)/libexec/gnubin" >> $GITHUB_PATH
-          echo "THEOS=${{ github.workspace }}/theos" >> $GITHUB_ENV
+          echo "$(brew --prefix make)/libexec/gnubin" >> "$GITHUB_PATH"
+          echo "THEOS=${{ github.workspace }}/theos" >> "$GITHUB_ENV"
 
       - name: Cache Theos
         if: ${{ inputs.enable_youpip || inputs.enable_ytuhd || inputs.enable_yq || inputs.enable_ryd || inputs.enable_ytabc || inputs.enable_demc }}
         id: theos
-        uses: actions/cache@v5
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         env:
-          cache-name: theos_cache_9bc7340
+          cache-name: theos-9bc73406cf80b711ef4d02c15ff1dedc4478a275-sdk-0222fd5413cf4b9af096f37b4621afa2688572f7
         with:
           path: theos/
-          key: ${{ env.cache-name }}
-          restore-keys: ${{ env.cache-name }}
+          key: ${{ runner.os }}-${{ runner.arch }}-${{ env.cache-name }}
 
       - name: Setup Theos
         if: ${{ (inputs.enable_youpip || inputs.enable_ytuhd || inputs.enable_yq || inputs.enable_ryd || inputs.enable_ytabc || inputs.enable_demc) && steps.theos.outputs.cache-hit != 'true' }}
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           repository: theos/theos
           ref: 9bc73406cf80b711ef4d02c15ff1dedc4478a275
           path: theos
+          persist-credentials: false
           submodules: recursive
 
       - name: Download iOS SDK
         if: ${{ (inputs.enable_youpip || inputs.enable_ytuhd || inputs.enable_yq || inputs.enable_ryd || inputs.enable_ytabc || inputs.enable_demc) && steps.theos.outputs.cache-hit != 'true' }}
+        env:
+          SDK_SHA: 0222fd5413cf4b9af096f37b4621afa2688572f7
         run: |
-          git clone --quiet -n --depth=1 --filter=tree:0 https://github.com/theos/sdks/
-          cd sdks
-          git sparse-checkout set --no-cone iPhoneOS16.5.sdk
-          git checkout
-          mv *.sdk $THEOS/sdks
+          bash .github/scripts/checkout_pinned.sh \
+            https://github.com/theos/sdks.git "$SDK_SHA" sdks iPhoneOS16.5.sdk
+          mv ./sdks/*.sdk "$THEOS/sdks"
 
       - name: Download YouTube Plus (by version)
         if: ${{ inputs.tweak_version != '' }}
+        env:
+          TWEAK_VERSION: ${{ inputs.tweak_version }}
         run: |
-          deb_url="https://github.com/dayanch96/YTLite/releases/download/v${{ inputs.tweak_version }}/com.dvntm.ytlite_${{ inputs.tweak_version }}_iphoneos-arm.deb"
-          wget "$deb_url" --no-verbose -O ytplus.deb
+          case "$TWEAK_VERSION" in
+            5.2b4|5.2.2) ;;
+            *)
+              echo "::error::Unsupported official release: $TWEAK_VERSION"
+              exit 1
+              ;;
+          esac
+          deb_url="https://github.com/dayanch96/YTLite/releases/download/v${TWEAK_VERSION}/com.dvntm.ytlite_${TWEAK_VERSION}_iphoneos-arm.deb"
+          curl --fail --location --max-filesize 104857600 --retry 3 --show-error --silent "$deb_url" --output ytplus.deb
+          python3 .github/scripts/verify_build.py deb --file ytplus.deb --version "$TWEAK_VERSION"
 
       - name: Download YouTube Plus (by URL)
         if: ${{ inputs.tweak_url != '' }}
+        env:
+          TWEAK_URL: ${{ inputs.tweak_url }}
         run: |
-          wget "${{ inputs.tweak_url }}" --no-verbose -O ytplus.deb
-          file_type=$(file --mime-type -b ytplus.deb)
-          if [[ "$file_type" != "application/vnd.debian.binary-package" ]]; then
-            echo "::error::Validation failed: The file is not a valid DEB file. Detected type: $file_type."
-            exit 1
-          fi
+          curl --fail --location --max-filesize 268435456 --retry 3 --show-error --silent "$TWEAK_URL" --output ytplus.deb
+          python3 .github/scripts/verify_build.py custom-deb --file ytplus.deb
 
       - name: Clone YouTubeHeader
         if: ${{ inputs.enable_youpip || inputs.enable_ytuhd || inputs.enable_yq || inputs.enable_ryd || inputs.enable_ytabc || inputs.enable_demc }}
+        env:
+          ENABLE_DEMC: ${{ inputs.enable_demc }}
+          YOUTUBE_HEADER_SHA: 62c24be3dfcaec60b7bda3868d84616b22e069e6
         run: |
-          if [ -d "$THEOS/include/YouTubeHeader" ]; then
-            cd $THEOS/include/YouTubeHeader && git pull
-          else
-            cd $THEOS/include && git clone --quiet --depth=1 https://github.com/PoomSmart/YouTubeHeader.git
-          fi
-          if [ "${{ inputs.enable_demc }}" = "true" ]; then
+          bash .github/scripts/checkout_pinned.sh \
+            https://github.com/PoomSmart/YouTubeHeader.git \
+            "$YOUTUBE_HEADER_SHA" "$THEOS/include/YouTubeHeader"
+          if [ "$ENABLE_DEMC" = "true" ]; then
             rm -rf "$THEOS/include/YTHeaders"
             cp -r "$THEOS/include/YouTubeHeader" "$THEOS/include/YTHeaders"
           fi
 
       - name: Clone PSHeader
         if: ${{ inputs.enable_youpip || inputs.enable_ytuhd || inputs.enable_yq || inputs.enable_ryd || inputs.enable_ytabc || inputs.enable_demc }}
+        env:
+          PS_HEADER_SHA: 1bb7d9c7d1bc40a57f83e1e58aa53bcf4acdcbfa
         run: |
-          if [ -d "$THEOS/include/PSHeader" ]; then
-            cd $THEOS/include/PSHeader && git pull
-          else
-            cd $THEOS/include && git clone --quiet --depth=1 https://github.com/PoomSmart/PSHeader.git
-          fi
+          bash .github/scripts/checkout_pinned.sh \
+            https://github.com/PoomSmart/PSHeader.git \
+            "$PS_HEADER_SHA" "$THEOS/include/PSHeader"
 
       - name: Clone YouPiP
         if: ${{ inputs.enable_youpip }}
-        run: git clone --quiet --depth=1 https://github.com/PoomSmart/YouPiP.git
+        run: bash .github/scripts/checkout_pinned.sh https://github.com/PoomSmart/YouPiP.git f9eadd8329470bad06dd6ded9513d522c090de73 YouPiP
 
       - name: Clone YTUHD
         if: ${{ inputs.enable_ytuhd }}
-        run: git clone --quiet --depth=1 https://github.com/Tonwalter888/YTUHD.git
+        run: bash .github/scripts/checkout_pinned.sh https://github.com/Tonwalter888/YTUHD.git cf266c2a351eb4f97e6bb2fb129509c501bdf207 YTUHD
 
       - name: Clone Return-YouTube-Dislikes
         if: ${{ inputs.enable_ryd }}
-        run: git clone --quiet --depth=1 https://github.com/PoomSmart/Return-YouTube-Dislikes.git
+        run: bash .github/scripts/checkout_pinned.sh https://github.com/PoomSmart/Return-YouTube-Dislikes.git 3347d770d699653fae6597bfe3b36ee896fbc9e8 Return-YouTube-Dislikes
 
       - name: Clone YTABConfig
         if: ${{ inputs.enable_ytabc }}
-        run: git clone --quiet --depth=1 https://github.com/PoomSmart/YTABConfig.git
+        run: bash .github/scripts/checkout_pinned.sh https://github.com/PoomSmart/YTABConfig.git b171adb9f1595484eca2ecf9d53e6eb7612c95f3 YTABConfig
 
       - name: Clone YouGroupSettings
         if: ${{ inputs.enable_youpip || inputs.enable_ytuhd || inputs.enable_yq || inputs.enable_ryd || inputs.enable_demc }}
-        run: git clone --quiet --depth=1 https://github.com/PoomSmart/YouGroupSettings.git
+        run: bash .github/scripts/checkout_pinned.sh https://github.com/PoomSmart/YouGroupSettings.git 4469be2398298c5a372bf345c1fbb7fcd8277cf8 YouGroupSettings
 
       - name: Clone YouQuality
         if: ${{ inputs.enable_yq }}
-        run: git clone --quiet --depth=1 https://github.com/PoomSmart/YouQuality.git
+        run: bash .github/scripts/checkout_pinned.sh https://github.com/PoomSmart/YouQuality.git 3199d594bbec58f419107fc7b1d9c28f209bcd04 YouQuality
 
       - name: Clone YTVideoOverlay
         if: ${{ inputs.enable_yq || inputs.enable_youpip || inputs.enable_ytuhd }}
-        run: git clone --quiet --depth=1 https://github.com/PoomSmart/YTVideoOverlay.git
+        run: bash .github/scripts/checkout_pinned.sh https://github.com/PoomSmart/YTVideoOverlay.git 0f7dbc4387a0e38aad3180744e484fef6cbb9094 YTVideoOverlay
 
       - name: Clone DontEatMyContent
         if: ${{ inputs.enable_demc }}
-        run: git clone --quiet --depth=1 https://github.com/therealFoxster/DontEatMyContent.git
+        run: bash .github/scripts/checkout_pinned.sh https://github.com/therealFoxster/DontEatMyContent.git 176adb9a163741c3cf74d9ad66d55e6643589b30 DontEatMyContent
 
       - name: Build YouPiP
         if: ${{ inputs.enable_youpip }}
@@ -199,19 +226,21 @@ jobs:
           mv packages/*.deb ../demc.deb
 
       - name: Clone Open in YouTube (Safari extension)
+        env:
+          EXTENSION_SHA: c87b5d5551b406477dca883158572f803251f52c
         run: |
-          git clone --quiet -n --depth=1 --filter=tree:0 https://github.com/BillyCurtis/OpenYouTubeSafariExtension
-          cd OpenYoutubeSafariExtension
-          git sparse-checkout set --no-cone OpenYoutubeSafariExtension.appex
-          git checkout
-          mv *.appex ..
+          bash .github/scripts/checkout_pinned.sh \
+            https://github.com/BillyCurtis/OpenYouTubeSafariExtension.git \
+            "$EXTENSION_SHA" OpenYoutubeSafariExtension \
+            OpenYoutubeSafariExtension.appex
+          mv ./OpenYoutubeSafariExtension/*.appex .
 
       - name: Upload built debs as artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: built-debs
           path: |
             *.deb
             *.appex
-          if-no-files-found: ignore
+          if-no-files-found: error
           retention-days: 1
