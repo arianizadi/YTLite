@@ -52,10 +52,13 @@ on:
         default: false
 
       tweak_version:
-        description: "The version of the tweak to use. Enter the version manually from dayanch96/YTLite/releases or leave default"
-        default: "5.2.2"
+        description: "YTPlus release: 5.2b4 is free; 5.2.2 requires an active subscription"
+        default: "5.2b4"
         required: true
-        type: string
+        type: choice
+        options:
+          - "5.2b4"
+          - "5.2.2"
 
       display_name:
         description: "App Name (Optional)"
@@ -88,13 +91,21 @@ jobs:
   package:
     name: Generate Cyan/TrollFools
     runs-on: macos-latest
+    timeout-minutes: 30
     needs: build-tweaks
     permissions:
-      contents: write
+      contents: read
+    outputs:
+      files: ${{ steps.filelist.outputs.files }}
 
     steps:
+      - name: Checkout workflow validators
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
       - name: Download built debs
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: built-debs
           path: ${{ github.workspace }}
@@ -102,27 +113,46 @@ jobs:
       - name: Check Inputs
         if: ${{ !inputs.create_cyan && !inputs.create_tf }}
         run: |
-          echo "No output format selected."
-          exit 0
+          echo "::error::Select at least one output format."
+          exit 1
 
       - name: Install Dependencies
         run: brew install dpkg
 
       - name: Install cyan
         if: ${{ inputs.create_cyan }}
-        run: pipx install --force https://github.com/asdfzxcvbn/pyzule-rw/archive/main.zip
+        run: pipx install --force https://github.com/asdfzxcvbn/pyzule-rw/archive/740d3716dcd98c20c000f12cdb88f1f0b2a533a4.zip
 
       - name: Generate .cyan file
         if: ${{ inputs.create_cyan }}
+        env:
+          BUNDLE_ID: ${{ inputs.bundle_id }}
+          DISPLAY_NAME: ${{ inputs.display_name }}
+          TWEAK_VERSION: ${{ inputs.tweak_version }}
         run: |
-          tweaks="ytplus.deb OpenYoutubeSafariExtension.appex"
-          for f in *.deb; do
-            [ -f "$f" ] && [ "$f" != "ytplus.deb" ] && tweaks="$tweaks $f"
+          tweaks=(ytplus.deb OpenYoutubeSafariExtension.appex)
+          for f in ./*.deb; do
+            [ -f "$f" ] && [ "$f" != "./ytplus.deb" ] && tweaks+=("$f")
           done
-          cgen -uwef $tweaks -n "${{ github.event.inputs.display_name }}" -b ${{ github.event.inputs.bundle_id }} -o cyan_YouTubePlus_${{ github.event.inputs.tweak_version }}.cyan
+          cgen -uwef "${tweaks[@]}" -n "$DISPLAY_NAME" -b "$BUNDLE_ID" -o "cyan_YouTubePlus_${TWEAK_VERSION}.cyan"
+
+      - name: Validate .cyan file
+        if: ${{ inputs.create_cyan }}
+        env:
+          BUNDLE_ID: ${{ inputs.bundle_id }}
+          DISPLAY_NAME: ${{ inputs.display_name }}
+          TWEAK_VERSION: ${{ inputs.tweak_version }}
+        run: |
+          python3 .github/scripts/verify_build.py cyan \
+            --file "cyan_YouTubePlus_${TWEAK_VERSION}.cyan" \
+            --version "$TWEAK_VERSION" \
+            --bundle-id "$BUNDLE_ID" \
+            --display-name "$DISPLAY_NAME"
 
       - name: Generate .zip file for TrollFools
         if: ${{ inputs.create_tf }}
+        env:
+          TWEAK_VERSION: ${{ inputs.tweak_version }}
         run: |
           mkdir -p ytp_tf
           for f in *.deb; do
@@ -135,26 +165,63 @@ jobs:
             fi
           done
           cd ytp_tf
-          zip -r "../TrollFools_YouTubePlus_${{ github.event.inputs.tweak_version }}.zip" .
+          zip -r "../TrollFools_YouTubePlus_${TWEAK_VERSION}.zip" .
           cd ..
           rm -rf ytp_tf
 
+      - name: Validate TrollFools file
+        if: ${{ inputs.create_tf }}
+        env:
+          TWEAK_VERSION: ${{ inputs.tweak_version }}
+        run: |
+          python3 .github/scripts/verify_build.py trollfools \
+            --file "TrollFools_YouTubePlus_${TWEAK_VERSION}.zip" \
+            --version "$TWEAK_VERSION"
+
       - name: Set output file list
         id: filelist
+        env:
+          CREATE_CYAN: ${{ inputs.create_cyan }}
+          CREATE_TF: ${{ inputs.create_tf }}
+          TWEAK_VERSION: ${{ inputs.tweak_version }}
         run: |
           files=""
-          [ "${{ github.event.inputs.create_cyan }}" = "true" ] && files="${files}cyan_YouTubePlus_${{ github.event.inputs.tweak_version }}.cyan"$'\n'
-          [ "${{ github.event.inputs.create_tf }}" = "true" ]   && files="${files}TrollFools_YouTubePlus_${{ github.event.inputs.tweak_version }}.zip"$'\n'
-          echo -e "files<<EOF" >> $GITHUB_OUTPUT
-          echo -e "$files" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          [ "$CREATE_CYAN" = "true" ] && files="${files}cyan_YouTubePlus_${TWEAK_VERSION}.cyan"$'\n'
+          [ "$CREATE_TF" = "true" ]   && files="${files}TrollFools_YouTubePlus_${TWEAK_VERSION}.zip"$'\n'
+          {
+            echo "files<<EOF"
+            printf '%s' "$files"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Stage validated files
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: packaged-tools
+          path: ${{ steps.filelist.outputs.files }}
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    name: Create draft tools release
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: package
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download validated files
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: packaged-tools
 
       - name: Upload to GitHub Releases
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3
         with:
-          tag_name: ytp-${{ github.run_number }}
-          name: YouTubePlus v${{ github.event.inputs.tweak_version }}_cyan_trollfools (${{ github.run_number }})
-          files: ${{ steps.filelist.outputs.files }}
+          tag_name: ytp-tools-${{ github.run_id }}
+          name: YouTubePlus v${{ inputs.tweak_version }}_cyan_trollfools (${{ github.run_number }})
+          files: ${{ needs.package.outputs.files }}
           draft: true
 
       - name: Output Release URL

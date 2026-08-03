@@ -80,7 +80,8 @@ Review by [@qbap](https://github.com/qbap) on ONE Jailbreak: https://onejailbrea
     <li>Mark or unmark the tweaks you want to integrate. Learn more about them in the <a href="#tweak-integration-details">Tweak Integration Details</a> section.</li>
     <li>Prepare a decrypted .ipa file <em>(we cannot provide this due to legal reasons)</em>, then upload it to a file provider (e.g., filebin.net, filemail.com, or Dropbox is recommended). Paste the URL of the decrypted IPA file in the provided field.</li>
     <li><strong>NOTE:</strong> Make sure to provide a direct download link to the file, not a link to a webpage. Otherwise, the process will fail.</li>
-    <li>Enter the tweak version from the releases (the latest release is selected by default). You can also change the BundleID and Display Name if desired.</li>
+    <li>Select the YTPlus release. The workflow defaults to the last free release, 5.2b4, whose upstream compatibility baseline is YouTube 20.42.3. YTPlus 5.2.2 uses the upstream 21.16.2 baseline and requires an active subscription.</li>
+    <li>Keep the original <code>com.google.ios.youtube</code> BundleID when diagnosing login or playback problems. Enable the unverified-version override only if you accept that the selected pair has not been confirmed.</li>
     <li>Make sure all inputs are correct, then click <strong>Run workflow</strong> to start the process.</li>
     <li>Wait for the build to finish. You can download the YouTube Plus app from the releases section of your forked repo. (If you can't find the releases section, go to your forked repo and add /releases to the URL, i.e., github.com/user/YTLite/releases.)</li>
   </ol>
@@ -94,11 +95,11 @@ Review by [@qbap](https://github.com/qbap) on ONE Jailbreak: https://onejailbrea
       <p><strong>NOTE:</strong> This option is primarily intended for building the YouTube Plus app based on the beta file you have. In other cases, it is generally not needed.</p>
     </blockquote>
     <li>Click on <strong>Sync fork</strong>, and if your branch is out-of-date, click on <strong>Update branch</strong>.</li>
-    <li>Navigate to the <strong>Actions tab</strong> in your forked repository and select <strong>[BETA] Build YouTube Plus app</strong>.</li>
+    <li>Navigate to the <strong>Actions tab</strong> in your forked repository and select <strong>[BETA] Create YouTube Plus app</strong>.</li>
     <li>Click the <strong>Run workflow</strong> button located on the right side.</li>
     <li>Mark or unmark the tweaks you want to integrate. Learn more about them in the <a href="#tweak-integration-details">Tweak Integration Details</a> section.</li>
     <li>Prepare a decrypted .ipa file <em>(we cannot provide this due to legal reasons)</em>, then upload it to a file provider (e.g., filebin.net, filemail.com, or Dropbox is recommended). Paste the URL of the decrypted IPA file in the provided field.</li>
-    <li>Upload your beta tweak file to a file provider and paste direct link to the <strong>URL to the YouTube Plus tweak file</strong> field. You can also change the BundleID and Display Name if desired.</li>
+    <li>Upload your rootful <code>iphoneos-arm</code> beta tweak file to a file provider and paste its direct link into the <strong>URL to the YouTube Plus tweak file</strong> field. The final IPA is checked against that exact DEB, allowing only the injector's required CydiaSubstrate path rewrite. You can also change the BundleID and Display Name if desired.</li>
     <li><strong>NOTE:</strong> Make sure to provide a direct download link to the file, not a link to a webpage. Otherwise, the process will fail.</li>
     <li>Make sure all inputs are correct, then click <strong>Run workflow</strong> to start the process.</li>
     <li>Wait for the build to finish. You can download the YouTube Plus app from the releases section of your forked repo. (If you can't find the releases section, go to your forked repo and add /releases to the URL, i.e., github.com/user/YTLite/releases.)</li>
@@ -106,11 +107,19 @@ Review by [@qbap](https://github.com/qbap) on ONE Jailbreak: https://onejailbrea
 </details>
 
 ## Supported YouTube Version
-<ul>
-   <li><strong>Latest confirmed:</strong> <em>21.16.2</em></li>
-   <li><strong>Date tested:</strong> <em>Jul 17, 2026</em></li>
-   <li><strong>YouTube Plus:</strong> <em>5.2.2</em></li>
-</ul>
+
+| Access | YouTube | YouTube Plus | Workflow behavior |
+| --- | --- | --- | --- |
+| Free legacy | 20.42.3 | 5.2b4 | Default; official package hash is enforced |
+| Subscription | 21.16.2 | 5.2.2 | Active YTPlus subscription required; official package hash is enforced |
+
+The IPA workflow rejects a different YouTube version unless **Allow an unverified YouTube/YTPlus version pair** is enabled. These are upstream compatibility baselines, not a guarantee for every signing method, device, or account. The override permits packaging only; it does not claim runtime compatibility.
+
+### Access and connection errors
+
+- **Access denied** or **You are not logged in** comes from YTPlus account verification. Use an active subscription with 5.2.2, or select the official free 5.2b4 release.
+- A YouTube **No Connection**, playback 403, or **No stream** error may be a separate host-app, signing, or server-token failure. Start with the matching baseline, original BundleID, and no optional integrations, then distinguish the exact playback/network error from the YTPlus account message. An entitlement-byte patch cannot create YouTube's server-issued playback/device tokens.
+- Each build verifies the source IPA structure and checks <code>cryptid</code> when encryption metadata is present. It also verifies the official YTPlus DEB, the complete post-injection YTLite binary, resource hashes, injector load path, and generated IPA/Cyan/TrollFools contents. Unknown or modified official-release binaries fail closed.
 
 ## Tweak Integration Details
 <details>
